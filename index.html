@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>確率過程 ランダムウォーク シミュレーション</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0f172a; }
+  canvas { display: block; }
+  input[type=range] { accent-color: #6366f1; }
+</style>
+</head>
+<body class="min-h-screen text-slate-100 p-4">
+<div class="max-w-5xl mx-auto">
+  <h1 class="text-2xl font-bold text-indigo-400 mb-1">確率過程 ランダムウォーク シミュレーション</h1>
+  <p class="text-slate-400 text-sm mb-4">多粒子ランダムウォークの期待値・分散収束と正規分布への近似を可視化</p>
+
+  <!-- Controls -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <!-- Mode -->
+    <div class="col-span-2 md:col-span-1 bg-slate-800 rounded-lg p-3">
+      <p class="text-xs text-slate-400 mb-2">モード</p>
+      <div class="flex gap-2">
+        <button id="btn1d" onclick="setMode('1d')" class="flex-1 py-1 rounded text-sm font-medium bg-indigo-600 text-white" aria-label="1次元モード">1D</button>
+        <button id="btn2d" onclick="setMode('2d')" class="flex-1 py-1 rounded text-sm font-medium bg-slate-700 text-slate-300" aria-label="2次元モード">2D</button>
+      </div>
+    </div>
+    <!-- Steps -->
+    <div class="bg-slate-800 rounded-lg p-3">
+      <label class="text-xs text-slate-400 block mb-1" for="stepsSlider">ステップ数: <span id="stepsVal">100</span></label>
+      <input id="stepsSlider" type="range" min="10" max="500" value="100" class="w-full" oninput="document.getElementById('stepsVal').textContent=this.value">
+    </div>
+    <!-- Particles -->
+    <div class="bg-slate-800 rounded-lg p-3">
+      <label class="text-xs text-slate-400 block mb-1" for="partSlider">粒子数: <span id="partVal">30</span></label>
+      <input id="partSlider" type="range" min="10" max="100" value="30" class="w-full" oninput="document.getElementById('partVal').textContent=this.value">
+    </div>
+    <!-- Buttons -->
+    <div class="bg-slate-800 rounded-lg p-3 flex flex-col gap-2">
+      <button onclick="runSim()" class="bg-indigo-600 hover:bg-indigo-500 text-white rounded py-1 text-sm font-medium" aria-label="シミュレーション実行">▶ 実行</button>
+      <button onclick="resetSim()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 rounded py-1 text-sm font-medium" aria-label="リセット">↺ リセット</button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="grid grid-cols-3 gap-3 mb-4">
+    <div class="bg-slate-800 rounded-lg p-3 text-center">
+      <p class="text-xs text-slate-400">平均位置</p>
+      <p id="statMean" class="text-xl font-bold text-indigo-400">0.00</p>
+    </div>
+    <div class="bg-slate-800 rounded-lg p-3 text-center">
+      <p class="text-xs text-slate-400">分散</p>
+      <p id="statVar" class="text-xl font-bold text-purple-400">0.00</p>
+    </div>
+    <div class="bg-slate-800 rounded-lg p-3 text-center">
+      <p class="text-xs text-slate-400">理論分散 (t)</p>
+      <p id="statTheory" class="text-xl font-bold text-emerald-400">0.00</p>
+    </div>
+  </div>
+
+  <!-- Main Canvas -->
+  <div class="bg-slate-800 rounded-lg p-2 mb-4">
+    <canvas id="mainCanvas" class="w-full rounded" style="height:300px"></canvas>
+  </div>
+
+  <!-- Distribution Canvas -->
+  <div class="bg-slate-800 rounded-lg p-2">
+    <p class="text-xs text-slate-400 mb-1 px-1">最終位置の分布（ヒストグラム + 正規分布近似）</p>
+    <canvas id="distCanvas" class="w-full rounded" style="height:180px"></canvas>
+  </div>
+</div>
+
+<script>
+let mode = '1d';
+let animFrame = null;
+let particles = [];
+let currentStep = 0;
+let maxSteps = 100;
+let totalParticles = 30;
+
+const mainCanvas = document.getElementById('mainCanvas');
+const distCanvas = document.getElementById('distCanvas');
+const mCtx = mainCanvas.getContext('2d');
+const dCtx = distCanvas.getContext('2d');
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('btn1d').className = 'flex-1 py-1 rounded text-sm font-medium ' + (m==='1d' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
+  document.getElementById('btn2d').className = 'flex-1 py-1 rounded text-sm font-medium ' + (m==='2d' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300');
+  resetSim();
+}
+
+function initParticles() {
+  maxSteps = parseInt(document.getElementById('stepsSlider').value);
+  totalParticles = parseInt(document.getElementById('partSlider').value);
+  particles = [];
+  for (let i = 0; i < totalParticles; i++) {
+    particles.push({ x: 0, y: 0, history: [{x:0,y:0}] });
+  }
+  currentStep = 0;
+}
+
+function stepAll() {
+  for (const p of particles) {
+    if (mode === '1d') {
+      const dx = Math.random() < 0.5 ? 1 : -1;
+      p.x += dx;
+      p.history.push({x: p.x, y: p.y});
+    } else {
+      const r = Math.floor(Math.random() * 4);
+      if (r === 0) p.x++;
+      else if (r === 1) p.x--;
+      else if (r === 2) p.y++;
+      else p.y--;
+      p.history.push({x: p.x, y: p.y});
+    }
+  }
+  currentStep++;
+}
+
+function getStats() {
+  const positions = particles.map(p => mode === '1d' ? p.x : Math.sqrt(p.x*p.x+p.y*p.y));
+  const mean = positions.reduce((a,b) => a+b, 0) / positions.length;
+  const variance = positions.reduce((a,b) => a + (b-mean)*(b-mean), 0) / positions.length;
+  return { mean, variance };
+}
+
+function resizeCanvas(canvas) {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width - 16;
+  canvas.height = canvas.offsetHeight || 300;
+}
+
+function drawMain() {
+  resizeCanvas(mainCanvas);
+  const W = mainCanvas.width, H = mainCanvas.height;
+  mCtx.fillStyle = '#1e293b';
+  mCtx.fillRect(0, 0, W, H);
+
+  if (mode === '1d') {
+    // Time-series plot
+    const maxPos = Math.max(20, Math.ceil(Math.sqrt(maxSteps) * 3));
+    const yCenter = H / 2;
+    const xScale = W / Math.max(1, currentStep);
+    const yScale = (H * 0.45) / maxPos;
+
+    // Grid
+    mCtx.strokeStyle = '#334155';
+    mCtx.lineWidth = 1;
+    for (let y = -maxPos; y <= maxPos; y += Math.floor(maxPos/4)) {
+      const py = yCenter - y * yScale;
+      mCtx.beginPath();
+      mCtx.moveTo(0, py);
+      mCtx.lineTo(W, py);
+      mCtx.stroke();
+      if (y !== 0) {
+        mCtx.fillStyle = '#475569';
+        mCtx.font = '10px monospace';
+        mCtx.fillText(y, 2, py - 2);
+      }
+    }
+    // Center line
+    mCtx.strokeStyle = '#475569';
+    mCtx.lineWidth = 1.5;
+    mCtx.beginPath();
+    mCtx.moveTo(0, yCenter);
+    mCtx.lineTo(W, yCenter);
+    mCtx.stroke();
+
+    // Particle traces
+    const alpha = Math.max(0.08, 0.5 / Math.sqrt(totalParticles));
+    for (let i = 0; i < particles.length; i++) {
+      const hue = (i * 360 / particles.length) % 360;
+      mCtx.strokeStyle = `hsla(${hue},80%,65%,${alpha})`;
+      mCtx.lineWidth = 1;
+      mCtx.beginPath();
+      for (let s = 0; s < particles[i].history.length; s++) {
+        const px = s * xScale;
+        const py = yCenter - particles[i].history[s].x * yScale;
+        if (s === 0) mCtx.moveTo(px, py);
+        else mCtx.lineTo(px, py);
+      }
+      mCtx.stroke();
+    }
+
+    // Mean path
+    if (currentStep > 0) {
+      mCtx.strokeStyle = '#f59e0b';
+      mCtx.lineWidth = 2;
+      mCtx.beginPath();
+      for (let s = 0; s <= currentStep; s++) {
+        const mean = particles.reduce((a,p) => a + (p.history[s]?.x||0), 0) / particles.length;
+        const px = s * xScale;
+        const py = yCenter - mean * yScale;
+        if (s === 0) mCtx.moveTo(px, py);
+        else mCtx.lineTo(px, py);
+      }
+      mCtx.stroke();
+      // Std dev bands
+      mCtx.fillStyle = 'rgba(99,102,241,0.08)';
+      const stdDev = Math.sqrt(currentStep);
+      const top = yCenter - stdDev * yScale;
+      const bot = yCenter + stdDev * yScale;
+      mCtx.fillRect(0, top, W, bot - top);
+    }
+
+  } else {
+    // 2D trace
+    const range = Math.max(20, Math.ceil(Math.sqrt(maxSteps) * 2));
+    const cx = W / 2, cy = H / 2;
+    const scale = Math.min(W, H) * 0.45 / range;
+
+    // Grid
+    mCtx.strokeStyle = '#334155';
+    mCtx.lineWidth = 0.5;
+    for (let g = -range; g <= range; g += Math.floor(range/4)) {
+      mCtx.beginPath();
+      mCtx.moveTo(cx + g * scale, 0);
+      mCtx.lineTo(cx + g * scale, H);
+      mCtx.stroke();
+      mCtx.beginPath();
+      mCtx.moveTo(0, cy + g * scale);
+      mCtx.lineTo(W, cy + g * scale);
+      mCtx.stroke();
+    }
+    // Axes
+    mCtx.strokeStyle = '#475569';
+    mCtx.lineWidth = 1;
+    mCtx.beginPath(); mCtx.moveTo(cx, 0); mCtx.lineTo(cx, H); mCtx.stroke();
+    mCtx.beginPath(); mCtx.moveTo(0, cy); mCtx.lineTo(W, cy); mCtx.stroke();
+
+    const alpha = Math.max(0.06, 0.4 / Math.sqrt(totalParticles));
+    for (let i = 0; i < particles.length; i++) {
+      const hue = (i * 360 / particles.length) % 360;
+      const p = particles[i];
+      if (p.history.length < 2) continue;
+      mCtx.strokeStyle = `hsla(${hue},80%,65%,${alpha})`;
+      mCtx.lineWidth = 1;
+      mCtx.beginPath();
+      for (let s = 0; s < p.history.length; s++) {
+        const px = cx + p.history[s].x * scale;
+        const py = cy - p.history[s].y * scale;
+        if (s === 0) mCtx.moveTo(px, py);
+        else mCtx.lineTo(px, py);
+      }
+      mCtx.stroke();
+      // Current dot
+      mCtx.fillStyle = `hsl(${hue},80%,75%)`;
+      mCtx.beginPath();
+      mCtx.arc(cx + p.x * scale, cy - p.y * scale, 2, 0, Math.PI*2);
+      mCtx.fill();
+    }
+  }
+
+  // Step counter
+  mCtx.fillStyle = '#94a3b8';
+  mCtx.font = '12px monospace';
+  mCtx.fillText(`Step: ${currentStep} / ${maxSteps}`, W - 120, 16);
+}
+
+function drawDist() {
+  resizeCanvas(distCanvas);
+  const W = distCanvas.width, H = distCanvas.height;
+  dCtx.fillStyle = '#1e293b';
+  dCtx.fillRect(0, 0, W, H);
+
+  if (currentStep === 0) return;
+
+  const finalPos = particles.map(p => p.x);
+  const min = Math.min(...finalPos);
+  const max = Math.max(...finalPos);
+  const range = Math.max(1, max - min);
+  const bins = Math.min(30, Math.floor(Math.sqrt(totalParticles) * 2) + 4);
+  const binSize = range / bins;
+  const counts = new Array(bins).fill(0);
+  for (const v of finalPos) {
+    const idx = Math.min(bins-1, Math.floor((v - min) / (binSize || 1)));
+    if (idx >= 0) counts[idx]++;
+  }
+  const maxCount = Math.max(1, ...counts);
+  const barW = W / bins;
+  const padTop = 20;
+
+  // Bars
+  for (let i = 0; i < bins; i++) {
+    const h = (counts[i] / maxCount) * (H - padTop - 10);
+    dCtx.fillStyle = 'rgba(99,102,241,0.7)';
+    dCtx.fillRect(i * barW + 1, H - h - 10, barW - 2, h);
+  }
+
+  // Normal distribution overlay
+  const mean = finalPos.reduce((a,b) => a+b,0) / finalPos.length;
+  const variance = Math.max(1, finalPos.reduce((a,b) => a+(b-mean)**2,0) / finalPos.length);
+  const sigma = Math.sqrt(variance);
+  dCtx.strokeStyle = '#f59e0b';
+  dCtx.lineWidth = 2;
+  dCtx.beginPath();
+  let firstPt = true;
+  for (let i = 0; i < W; i++) {
+    const x = min + (i / W) * range;
+    const norm = (1 / (sigma * Math.sqrt(2*Math.PI))) * Math.exp(-0.5*((x-mean)/sigma)**2);
+    const normMax = (1 / (sigma * Math.sqrt(2*Math.PI)));
+    const h = (norm / normMax) * (H - padTop - 10);
+    const py = H - h - 10;
+    if (firstPt) { dCtx.moveTo(i, py); firstPt = false; }
+    else dCtx.lineTo(i, py);
+  }
+  dCtx.stroke();
+
+  // Labels
+  dCtx.fillStyle = '#94a3b8';
+  dCtx.font = '11px monospace';
+  dCtx.fillText(`μ=${mean.toFixed(2)}  σ=${sigma.toFixed(2)}  n=${totalParticles}`, 8, 14);
+  dCtx.fillStyle = '#f59e0b';
+  dCtx.fillText('— 正規分布近似', W - 100, 14);
+}
+
+function updateStats() {
+  const { mean, variance } = getStats();
+  document.getElementById('statMean').textContent = mean.toFixed(2);
+  document.getElementById('statVar').textContent = variance.toFixed(2);
+  document.getElementById('statTheory').textContent = currentStep.toFixed(0);
+}
+
+function runSim() {
+  if (animFrame) cancelAnimationFrame(animFrame);
+  initParticles();
+
+  function animate() {
+    const batchSize = Math.max(1, Math.floor(maxSteps / 120));
+    for (let i = 0; i < batchSize && currentStep < maxSteps; i++) {
+      stepAll();
+    }
+    drawMain();
+    drawDist();
+    updateStats();
+    if (currentStep < maxSteps) {
+      animFrame = requestAnimationFrame(animate);
+    }
+  }
+  animFrame = requestAnimationFrame(animate);
+}
+
+function resetSim() {
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+  initParticles();
+  drawMain();
+  drawDist();
+  document.getElementById('statMean').textContent = '0.00';
+  document.getElementById('statVar').textContent = '0.00';
+  document.getElementById('statTheory').textContent = '0.00';
+}
+
+window.addEventListener('resize', () => { drawMain(); drawDist(); });
+resetSim();
+</script>
+</body>
+</html>
